@@ -1,0 +1,329 @@
+
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{inconsolata}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\usepackage{graphicx}
+
+%for code : 
+\usepackage{listings}
+\usepackage{xcolor}
+\lstset{
+  language=Caml,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue},
+  commentstyle=\color{gray},
+  stringstyle=\color{green},
+  numbers=left,
+  frame=single
+}
+
+
+\title{INPF12 Project}
+\author{Ahmed Soumbara }
+\date{April 2026}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Context}
+We're working  with relational tables and essentially implementing a simple SQL engine . The end goal is , given present information , to find functional dependencies of a table and suggest improvements
+
+\section{How tables are represented}
+A table is represented by a record with two fields: \textbf{\texttt{cols}} which is a \textbf{\texttt{schema}} (a list of column name and type pairs), and \textbf{\texttt{rows}} which is a list of rows. Each \textbf{\texttt{row}} is a list of \textbf{\texttt{dbvalue}} . The connection between a value in a row and its column is purely positional — the value at index i in a row corresponds to the column at index i in the schema.\\
+\\
+\underline{Example:}
+\begin{lstlisting}
+    let example_table = { cols = [ ("id",   (TInt,  false));
+               ("name", (TText, true ));
+               ("age",  (TInt,  false)) ];
+      rows = [ [VInt 1; VText "Alice"; VInt 30];
+               [VInt 2; VText "Bob";   VInt 25] ]
+    }
+\end{lstlisting}
+
+\section{Base Functions}
+\subsection{\texttt{check\_table}}
+checks if argument \texttt{tbl} of type \texttt{table} is valid or not . \\
+
+I saw the best way to implement this is to return \texttt{true} if argument follows the following rules :
+
+\begin{itemize}
+    \item Rule 1 : Every row has the same number of columns as the schema. 
+    \item Rule 2 :  Each value matches the column's type
+    \item Rule 3 :  NULL only appears in columns with the schema \texttt{(\_,(\_, true))}
+    \item Rule 4: No duplicate Columns names
+\end{itemize}
+
+\underline{\textbf{NOTE : }} At this stage , i didn't take into account the 5th rule of validity : \textit{NO duplicate rows values}.
+
+\subsection{\texttt{insert}}
+inserts \textbf{\texttt{row}} in \textbf{\texttt{tbl.rows}} then checks if the resulting table is valid or not . 
+
+\subsection{\texttt{prod}}
+takes 2 tables \texttt{tb1} \texttt{tb2} and returns the cartesien product between them .//
+
+here i made a helper function f whose job is taking a row = \texttt{cst} and combining it with every row of \texttt{bis}
+\begin{lstlisting}
+       let rec f cst bis acc  = 
+      match bis with 
+      |[] -> acc
+      |l::ls -> let acc' = [cst@l]@acc in 
+                  f cst ls acc'
+\end{lstlisting}
+
+and at the end we use List.concat\_map( which is the same as  List.concat(List.map()) to apply f and  flatten the results into a single list instead of a list of lists , we understand this from its descreption in List module : 
+From https://ocaml.org/manual/5.4/api/List.html :
+\begin{lstlisting}
+    val concat : 'a list list -> 'a list
+\end{lstlisting}
+description : Concatenate a list of lists. The elements of the argument are all concatenated together (in the same order) to give the result. Not tail-recursive (length of the argument + length of the longest sub-list).
+\begin{lstlisting}
+    Example :
+    List.concat [[1]; [2; 3]; [4]]
+    (* → [1; 2; 3; 4] *)
+\end{lstlisting}
+
+\subsection{\texttt{projection}}
+The goal is to build a new table by keeping in the columns the ones specified by \texttt{field} . the tricky part is making the new rows with the extracted collumns , because given the implementation , the only connection between rows and "cols" is the index number , so we need a function that given a column name returns its index number in the tbl.cols list so we can use that index to exrtact the rows corresponding value and build a new row. \\
+\\
+that function is named  \texttt{find\_row\_index}.
+\begin{lstlisting}
+    let rec  find_row_index field counter cols =
+   match cols with 
+   |[]-> failwith "field not found in cols"
+   |(name,_)::rest_cols -> if(name = field) then counter  
+                    else find_row_index field (counter +1) rest_cols
+;;
+\end{lstlisting}
+its gonna prove usefull in subsequent implementation
+
+First we filter the columns : 
+\begin{lstlisting}
+      
+   let find_col field = List.find (fun (name,(_,_))->
+                                        name = field) tbl.cols
+   in 
+   
+   let new_cols = List.map (fun field -> find_col field) fields in 
+\end{lstlisting}
+\underline{Note:} find f l returns the first element of the list l that satisfies the predicate f, so it won't work if theres columns with the same name (rule 4 of table validity protects from that) . 
+
+then using those column names , we extarct the corresponding indexes and use those to build new rows .
+
+\subsection{\texttt{restrict}}
+to make restrict we just use \texttt{List.filter} on tbl.rows , meaning we apply filter on the list of list "tbl.rows" to only return the lists "rows" that satisfy the predicate f .\\
+\section{\texttt{compute\_deps}}
+
+To get \texttt{ALL} dependencies first we need 2 functions : 
+
+\begin{itemize}
+    \item \texttt{subsets} : given a list , this function returns all possible subsets ( or sublists) . For example : ["a";"b"; "c"] = [[]](= empty list); ["c"]; ["b"]; ["b"; "c"]; ["a"]; ["a"; "c"]; ["a"; "b"];["a"; "b"; "c"]]
+
+    \item \texttt{all\_pairs} : returns all possible pairs of a given list 
+\end{itemize}
+
+with these 2 functions we can check for every \texttt{lhs,rhs} belonging to a subset of \textbf{\texttt{col\_names}} we check if the dependency $lhs\rightarrow rhs$ holds  . In general a dependancy $X \rightarrow Y$ is true if knowing the value in columm X gives the value of column Y , meaning given a value of X , all values of Y should be the same . We use this logic to make the \textbf{\texttt{check\_fd}} function that follows the following logic : 
+
+    given the 2 fields lhs and rhs,
+    first we project on lhs,rhs \\
+
+    then we exctract all unique values in lhs\\ 
+
+    for each unique value v , we restrict the projected table to where lhs = v \\
+
+    if all rhs values are equal return true (the dependecy lhs -> rhs holds)\\
+
+    otherwise false \\
+
+\begin{figure}[h]
+\centering
+
+% Table 1: Original table
+\begin{minipage}{0.3\textwidth}
+    \centering
+    \textbf{   Table}\\[0.5em]
+    \begin{tabular}{|c|c|c|c|}
+    \hline
+    \textbf{id} & \textbf{name} & \textbf{dept} & \textbf{salary} \\
+    \hline
+     & & & \\
+     & & & \\
+     & & & \\
+     & & & \\
+    \hline
+    \end{tabular}
+    \end{minipage}
+    \hfill
+    % Arrow
+    \begin{minipage}{0.05\textwidth}
+    \centering
+    $\Rightarrow$\\
+    \small projection\\
+    on lhs,rhs
+    \end{minipage}
+    \hfill
+    % Table 2: Projection
+    \begin{minipage}{0.25\textwidth}
+    \centering
+    \textbf{Projection (lhs,rhs)}\\[0.5em]
+    \begin{tabular}{|c|c|}
+    \hline
+    \textbf{lhs} & \textbf{rhs} \\
+    \hline
+     & \\
+     & \\
+     & \\
+     & \\
+    \hline
+    \end{tabular}
+    \end{minipage}
+    \hfill
+    % Arrow
+    \begin{minipage}{0.05\textwidth}
+    \centering
+    $\Rightarrow$\\
+    \small restrict\\
+    lhs = v
+    \end{minipage}
+    \hfill
+    % Table 3: Restriction
+    \begin{minipage}{0.2\textwidth}
+    \centering
+    \textbf{Restriction (lhs=v)}\\[0.5em]
+    \begin{tabular}{|c|c|}
+    \hline
+    \textbf{lhs} & \textbf{rhs} \\
+    \hline
+    v & ? \\
+    v & ? \\
+    \hline
+    \end{tabular}
+\end{minipage}
+
+\caption{Illustration of \texttt{check\_fd} for lhs $\rightarrow$ rhs}
+\end{figure}
+
+all thats left is to filter all possible combinations with this check\_fd function.\\
+
+but this turns out to give a lot of redundant and duplicate dependencies .So even though the function should return ALL dependencies , i chose to filer them and not show the unions.
+\\ for all dependencies of form $X\rightarrow YZ$ , if we already have $X\rightarrow Y$ and $X\rightarrow Z$ as dependencies , theres no need to keep the dependency $X\rightarrow YZ$ . This is the logic of \texttt{check\_union}.
+
+\section{\texttt{compute\_elementary\_deps}}
+
+calls \texttt{compute\_deps} to get \texttt{all\_fds} and filters them to only keep the ones that verify : 
+
+\begin{itemize}
+    \item \texttt{check\_atomic} checks if fd=(lhs,rhs) is atomic , meaning if the length of rhs is lesser then 2 . 
+
+    \item \texttt{check\_redundancy} (lhs,rhs) is redundant if there exists a fd (l,r) in all\_fds such that r = rhs and l is a strict subset of lhs ( see \texttt{is\_strict\_subset} function )
+\end{itemize}
+
+\section{\texttt{normalization\_level}}
+
+\subsection{1NF Guarantee}
+
+A table is in 1NF if every cell contains an atomic value — meaning a single, indivisible value, not a list . And in our model, 1NF is automatically satisfied by every table, thats because the type \texttt{dbvalue} only allows atomic values \texttt{VInt}, \texttt{VText}, and \texttt{VNull}. It is impossible to represent a non-1NF table since there is no \texttt{VList} or \texttt{VTable} constructor. Therefore \texttt{normalization\_level} always returns at least 1.
+
+\subsection{Key Detection}
+
+Before checking 2NF and 3NF, we need to find the keys of the table. A key is a set of columns that determines all other columns. \\
+
+To find keys, we first merge all functional dependencies that share the same \texttt{lhs} into a single dependency, then check if \texttt{lhs @ rhs} covers all columns:
+
+\begin{lstlisting}
+(* a lhs is a key if lhs @ rhs covers all columns *)
+let keys_fds = List.filter (fun (lhs, rhs) -> 
+    same_elements (lhs @ rhs) all_cols
+) merged_fds
+\end{lstlisting}
+
+We then keep only \textbf{minimal} keys , a key is minimal if no strict subset of it is also a key:
+
+\begin{lstlisting}
+let keys = List.filter (fun key ->
+    not (List.exists (fun other_key ->
+        is_strict_subset other_key key
+    ) all_keys)
+) all_keys
+\end{lstlisting}
+
+\subsection{2NF Check}
+
+A table is in 2NF if it is in 1NF and no non-key attribute is partially dependent on a key , meaning no non-key attribute depends on a \textit{strict subset} of a key. \\
+
+First we find all non-key attributes ,columns that don't belong to any key:
+
+\begin{lstlisting}
+let att_not_in_keys = List.filter (fun col -> 
+    not (List.exists (fun key -> List.mem col key) keys)
+) all_cols
+\end{lstlisting}
+
+Then for each non-key attribute, we check if any strict subset of any key determines it:
+
+\begin{lstlisting}
+(* does any strict subset of this key determine att? *)
+let key_partially_determines key att = 
+    List.exists (fun subkey -> 
+        subkey_determines subkey att
+    ) (strict_subsets_of key) 
+
+(* is att partially dependent on ANY key? *)
+let is_dependent_on_subkey att = 
+    List.exists (fun key -> 
+        key_partially_determines key att
+    ) keys 
+\end{lstlisting}
+
+If any non-key attribute is partially dependent on a key, the table fails 2NF and we return 1.
+
+\subsection{3NF Check}
+
+A table is in 3NF if it is in 2NF and for every elementary dependency $X \rightarrow A$:
+\begin{itemize}
+    \item either $X$ is a key
+    \item or $A$ belongs to some key
+\end{itemize}
+
+\begin{lstlisting}
+let is_3nf_cond = List.for_all (fun (x, ak) ->
+    match ak with
+    | [a] -> List.mem x keys || 
+              List.exists (fun key -> List.mem a key) keys
+    | _ -> false
+) all_elem_fds
+\end{lstlisting}
+
+If any elementary dependency violates this condition, the table fails 3NF and we return 2. Otherwise we return 3.
+
+\section{Limitations}
+
+\subsection{Data-Driven Detection}
+Functional dependencies are detected purely from the data present in the table. A dependency that doesn't manifest in the current data will not be detected. Conversely, a dependency that holds by coincidence in the current data will be incorrectly reported. For example, if all employees happen to have unique names, \texttt{name $\rightarrow$ id} will be detected even though it is not a real constraint. This can cause \texttt{normalization\_level} to incorrectly classify a table
+
+
+\subsection{Transitivity in Key Detection}
+Our key detection does not handle transitivity. A key whose determination requires chaining multiple functional dependencies will not be detected. A complete implementation would require a \textit{closure algorithm} , computing the set of all attributes determinable from a given set of attributes by repeatedly applying known dependencies.
+
+\section{Tests}
+to compile test i just ran this code 
+\begin{lstlisting}
+    ocamlc -g -c projet.ml
+    ocamlc -g -c tests.ml
+    ocamlc -g projet.cmo tests.cmo -o test_projet
+    ./test_projet
+\end{lstlisting}
+\section{Conclusion}
+I found this project pretty interesting , it was a good oppurtinity to get comfortable with some notions i didn't really understand in class , the list module . it was also a good opurtinitty to recall notions i was already familiar with in CBDR11 .the most challanging part of it was the last 3 functions ,espacially $ormalisation_level$ and $compute\_deps$ , the most challenging part was time management because this is the first project we have in tandem with studies .contrary to the last PRIM11 project in which we had the whole vacation to focus on it .
+
+\end{document}
